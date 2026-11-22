@@ -1,0 +1,537 @@
+<!-- test -->
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<script>
+/* =====================================================================
+   CONFIG 設定區：要更換標題、類別名稱、字詞或資料接收網址，只改這裡。
+   ===================================================================== */
+const CONFIG = {
+  title: '分類作業',                       // 受測者看到的標題
+  concept1: {                              // 概念 1（想了解態度的對象）
+    name: '年長員工',
+    words: ['年長者', '中高齡', '五十五歲', '五十幾歲']
+  },
+  concept2: {                              // 概念 2（對照類別）
+    name: '年輕員工',
+    words: ['年輕人', '青年', '二十五歲', '二十幾歲']
+  },
+  positive: {                              // 正向屬性
+    name: '有能力',
+    words: ['能幹', '聰明', '優秀', '稱職']
+  },
+  negative: {                              // 負向屬性
+    name: '沒能力',
+    words: ['無能', '愚笨', '平庸', '失職']
+  },
+  endpoint: ''                             // 資料接收網址；留空時只提供下載 CSV
+};
+/* ===================================================================== */
+</script>
+<title>分類作業</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;background:#f6f6f3;color:#222;-webkit-text-size-adjust:100%}
+  #app{min-height:100vh;min-height:100dvh}
+
+  .screen{max-width:640px;margin:0 auto;padding:40px 16px 48px}
+  .screen h1{font-size:1.7rem;margin-bottom:1.2rem}
+  .screen p{line-height:1.8;margin-bottom:.9rem}
+  .field{display:block;margin-bottom:1rem;border:none}
+  .field>span,.field legend{display:block;font-weight:700;margin-bottom:.5rem}
+  input[type=text]{width:100%;font:inherit;font-size:1.1rem;padding:.7rem .8rem;border:1px solid #bbb;border-radius:8px;background:#fff}
+  .radio{display:inline-flex;align-items:center;gap:.4rem;margin-right:1.5rem;font-size:1.05rem;padding:.4rem 0}
+  .radio input{width:1.2rem;height:1.2rem}
+  .note{font-size:.9rem;color:#666}
+  .msg{color:#c62828;min-height:1.6em}
+  .btn{font:inherit;font-size:1.1rem;padding:.8rem 1.8rem;border:none;border-radius:8px;background:#264653;color:#fff;cursor:pointer}
+  .btn.secondary{background:#fff;color:#264653;border:1px solid #264653}
+  .actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:1rem}
+  table.words{border-collapse:collapse;margin:0 0 1.5rem;width:100%}
+  table.words th,table.words td{padding:.5rem .6rem;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}
+  table.words th{white-space:nowrap}
+
+  .concept{color:#1d4e89}
+  .attr{color:#2a7a3b}
+
+  .task{display:flex;flex-direction:column;height:100vh;height:100dvh;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:manipulation}
+  .labels{display:flex;justify-content:space-between;align-items:flex-start;padding:16px 16px 0}
+  .label{display:flex;flex-direction:column;align-items:center;max-width:46%;font-size:clamp(1.1rem,4.5vw,1.6rem);font-weight:700;line-height:1.35;text-align:center}
+  .or{color:#999;font-size:.75em;font-weight:400}
+  .keyhint{margin-top:.3rem;color:#999;font-size:.75em;font-weight:400}
+  .center{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 16px}
+  .stim{font-size:clamp(2.2rem,10vw,3.4rem);font-weight:700;min-height:1.4em}
+  .err{color:#c62828;font-size:clamp(2.5rem,10vw,3.5rem);font-weight:700;height:1.3em;visibility:hidden}
+  .err.show{visibility:visible}
+  .instr{max-width:560px;text-align:left}
+  .instr p{line-height:1.8;margin-bottom:.8rem}
+  .instr .btn{display:block;margin:1.2rem auto 0}
+  .blockno{color:#888;font-size:.95rem}
+
+  .pad{display:none;gap:12px;padding:0 12px 16px}
+  body.touch .pad{display:flex}
+  .pad button{flex:1;height:26vh;min-height:120px;max-height:240px;font-size:2rem;color:#555;background:#fff;border:2px solid #bbb;border-radius:16px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+  .pad button.pressed{background:#e6e6e6}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+'use strict';
+
+/* ---------- 固定參數 ---------- */
+const BLOCK_SIZES = [20, 20, 20, 40, 20, 20, 40];  // 七個區段的嘗試次數
+const ITI_MS = 250;            // 按對之後到下一個字詞出現的間隔
+const MAX_RT = 10000;          // 計分時刪除超過這個值的嘗試
+const FAST_RT = 300;           // 過快反應的門檻
+const FAST_LIMIT = 0.10;       // 過快比例超過此值時，D 設為空白
+const ID_PATTERN = /^[A-Za-z0-9_-]{1,30}$/;  // 受測者代碼只接受英數字、- 與 _
+
+const CAT = {
+  c1:  { name: CONFIG.concept1.name, words: CONFIG.concept1.words, type: 'concept' },
+  c2:  { name: CONFIG.concept2.name, words: CONFIG.concept2.words, type: 'concept' },
+  pos: { name: CONFIG.positive.name, words: CONFIG.positive.words, type: 'attr' },
+  neg: { name: CONFIG.negative.name, words: CONFIG.negative.words, type: 'attr' }
+};
+
+// 只要裝置有觸控能力就顯示左右大按鈕（手機、平板、觸控筆電），電腦的 E／I 鍵仍然可用
+const TOUCH = !!(
+  (window.matchMedia && window.matchMedia('(any-pointer: coarse)').matches) ||
+  navigator.maxTouchPoints > 0 ||
+  'ontouchstart' in window
+);
+if (TOUCH) document.body.classList.add('touch');
+document.title = CONFIG.title;
+
+const app = document.getElementById('app');
+const state = {
+  id: '', session: null, order: null,
+  blocks: [], bi: 0, trials: [], ti: 0,
+  data: [],
+  mode: 'setup',        // setup | intro | instr | iti | trial | end
+  t0: 0, erred: false,
+  payload: null,
+  dataSafe: true        // false 時，關閉頁面會跳出警告
+};
+
+/* ---------- 工具 ---------- */
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+function hasAdjacentRepeat(a) {
+  for (let i = 1; i < a.length; i++) if (a[i].stimulus === a[i - 1].stimulus) return true;
+  return false;
+}
+
+/* ---------- 區段安排 ---------- */
+// 配對 A：概念 1 與正向屬性同一鍵；配對 B：概念 1 與負向屬性同一鍵。
+// 正向屬性固定在左、負向屬性固定在右，靠概念的左右位置決定配對。
+function buildBlocks(order) {
+  const first = order === 1 ? 'A' : 'B';
+  const second = order === 1 ? 'B' : 'A';
+  const leftConcept = p => (p === 'A' ? 'c1' : 'c2');
+  const other = c => (c === 'c1' ? 'c2' : 'c1');
+  const L1 = leftConcept(first), R1 = other(L1);
+  const L2 = leftConcept(second), R2 = other(L2);
+  const n = BLOCK_SIZES;
+  return [
+    { block: 1, pairing: first,  phase: 'single',   n: n[0], left: [L1],        right: [R1] },
+    { block: 2, pairing: first,  phase: 'single',   n: n[1], left: ['pos'],     right: ['neg'] },
+    { block: 3, pairing: first,  phase: 'practice', n: n[2], left: [L1, 'pos'], right: [R1, 'neg'] },
+    { block: 4, pairing: first,  phase: 'test',     n: n[3], left: [L1, 'pos'], right: [R1, 'neg'] },
+    { block: 5, pairing: second, phase: 'single',   n: n[4], left: [L2],        right: [R2] },
+    { block: 6, pairing: second, phase: 'practice', n: n[5], left: [L2, 'pos'], right: [R2, 'neg'] },
+    { block: 7, pairing: second, phase: 'test',     n: n[6], left: [L2, 'pos'], right: [R2, 'neg'] }
+  ];
+}
+
+// 從某一類別抽 n 個字詞，每個字詞輪流使用，次數盡量平均
+function wordsCycle(cat, n) {
+  const out = [];
+  while (out.length < n) out.push(...shuffle(CAT[cat].words.slice()));
+  return out.slice(0, n).map(w => ({ category: cat, stimulus: w }));
+}
+// 各類別次數相同，打亂順序，並避免同一個字詞連續出現
+function balancedSeq(cats, n) {
+  const per = n / cats.length;
+  const items = [];
+  cats.forEach(c => items.push(...wordsCycle(c, per)));
+  for (let k = 0; k < 500; k++) {
+    shuffle(items);
+    if (!hasAdjacentRepeat(items)) break;
+  }
+  return items;
+}
+// 合併區段：屬性字詞與概念字詞交替出現
+function makeTrials(b) {
+  const cats = b.left.concat(b.right);
+  const con = cats.filter(c => CAT[c].type === 'concept');
+  const att = cats.filter(c => CAT[c].type === 'attr');
+  if (con.length && att.length) {
+    const half = b.n / 2;
+    const cs = balancedSeq(con, half), as = balancedSeq(att, half);
+    const seq = [];
+    for (let i = 0; i < half; i++) seq.push(as[i], cs[i]);
+    return seq;
+  }
+  return balancedSeq(cats, b.n);
+}
+
+/* ---------- 畫面：輸入代碼 ---------- */
+function renderSetup() {
+  state.mode = 'setup';
+  app.innerHTML = `
+    <div class="screen">
+      <h1>${esc(CONFIG.title)}</h1>
+      <label class="field">
+        <span>受測者代碼</span>
+        <input id="pid" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="30" placeholder="請輸入研究人員提供的代碼">
+      </label>
+      <p class="note">請輸入研究人員提供的代碼，不要輸入姓名或員工編號。</p>
+      <fieldset class="field">
+        <legend>這是第幾次作答？</legend>
+        <label class="radio"><input type="radio" name="sess" value="1"> 第 1 次</label>
+        <label class="radio"><input type="radio" name="sess" value="2"> 第 2 次</label>
+      </fieldset>
+      <p id="msg" class="msg"></p>
+      <button id="go" class="btn">下一步</button>
+    </div>`;
+  document.getElementById('go').addEventListener('click', () => {
+    const id = document.getElementById('pid').value.trim();
+    const s = document.querySelector('input[name=sess]:checked');
+    const msg = document.getElementById('msg');
+    if (!id) {
+      msg.textContent = '請輸入受測者代碼。';
+      return;
+    }
+    if (!ID_PATTERN.test(id)) {
+      msg.textContent = '代碼只能使用英文字母、數字、「-」或「_」，最多 30 個字元。';
+      return;
+    }
+    if (!s) {
+      msg.textContent = '請選擇這是第 1 次或第 2 次作答。';
+      return;
+    }
+    state.id = id;
+    state.session = Number(s.value);
+    state.order = Math.random() < 0.5 ? 1 : 2;   // 1：先做配對 A；2：先做配對 B
+    state.blocks = buildBlocks(state.order);
+    state.dataSafe = false;
+    if (document.activeElement) document.activeElement.blur();
+    renderIntro();
+  });
+}
+
+/* ---------- 畫面：作業說明 ---------- */
+function renderIntro() {
+  state.mode = 'intro';
+  const rows = ['c1', 'c2', 'pos', 'neg'].map(c =>
+    `<tr><th class="${CAT[c].type}">${esc(CAT[c].name)}</th><td>${CAT[c].words.map(esc).join('、')}</td></tr>`
+  ).join('');
+  const how = TOUCH
+    ? '請用畫面下方左、右兩個大按鈕作答。'
+    : '請把左手食指放在 <b>E</b> 鍵、右手食指放在 <b>I</b> 鍵。字詞屬於左邊的類別按 E，屬於右邊的類別按 I。';
+  app.innerHTML = `
+    <div class="screen">
+      <h1>${esc(CONFIG.title)}</h1>
+      <p>接下來畫面中央會逐一出現字詞，請盡快、正確地把每個字詞歸到畫面左上或右上的類別。</p>
+      <p>${how}</p>
+      <p>按錯時會出現紅色 ✕，請改按另一邊，才會出現下一個字詞。</p>
+      <p>作業共 7 段，大約需要 5 分鐘。請在安靜的環境中一次完成，中途不要離開。</p>
+      <p>以下是各類別包含的字詞：</p>
+      <table class="words">${rows}</table>
+      <button id="go" class="btn">開始</button>
+    </div>`;
+  document.getElementById('go').addEventListener('click', () => {
+    state.bi = 0;
+    renderBlockInstr();
+  });
+}
+
+/* ---------- 畫面：作業框架 ---------- */
+function sideLabel(cats, key) {
+  const parts = cats.map(c => `<span class="${CAT[c].type}">${esc(CAT[c].name)}</span>`)
+    .join('<span class="or">或</span>');
+  const hint = TOUCH ? '' : `<span class="keyhint">按 ${key}</span>`;
+  return `<div class="label">${parts}${hint}</div>`;
+}
+function renderTaskFrame(b) {
+  app.innerHTML = `
+    <div class="task">
+      <div class="labels">${sideLabel(b.left, 'E')}${sideLabel(b.right, 'I')}</div>
+      <div class="center" id="center"></div>
+      <div class="pad">
+        <button id="padL" type="button" aria-label="左邊">◀</button>
+        <button id="padR" type="button" aria-label="右邊">▶</button>
+      </div>
+    </div>`;
+  bindPad('padL', 'left');
+  bindPad('padR', 'right');
+}
+function bindPad(id, side) {
+  const el = document.getElementById(id);
+  const handler = e => {
+    e.preventDefault();
+    if (state.mode === 'trial') {
+      el.classList.add('pressed');
+      setTimeout(() => el.classList.remove('pressed'), 120);
+    }
+    respond(side);
+  };
+  if (window.PointerEvent) el.addEventListener('pointerdown', handler);
+  else el.addEventListener('touchstart', handler, { passive: false });
+}
+
+/* ---------- 畫面：區段說明 ---------- */
+function renderBlockInstr() {
+  const b = state.blocks[state.bi];
+  state.mode = 'instr';
+  renderTaskFrame(b);
+  const keyL = TOUCH ? '左邊的按鈕' : ' E 鍵';
+  const keyR = TOUCH ? '右邊的按鈕' : ' I 鍵';
+  const names = side => side.map(c => `「<span class="${CAT[c].type}">${esc(CAT[c].name)}</span>」`).join('或');
+  const lines = [`<span class="blockno">第 ${b.block} 段，共 7 段</span>`];
+  if (b.block === 5) lines.push('<b>注意：兩個類別的左右位置已經互換。</b>');
+  if (b.phase === 'test') lines.push('這一段的分類方式和上一段相同。');
+  lines.push(`字詞屬於${names(b.left)}，請按${keyL}；屬於${names(b.right)}，請按${keyR}。`);
+  lines.push('按錯時會出現紅色 ✕，請改按另一邊。請盡量又快又正確。');
+  const btnText = TOUCH ? '開始' : '開始（或按空白鍵）';
+  document.getElementById('center').innerHTML = `
+    <div class="instr">
+      ${lines.map(l => `<p>${l}</p>`).join('')}
+      <button id="startBlock" class="btn" type="button">${btnText}</button>
+    </div>`;
+  document.getElementById('startBlock').addEventListener('click', beginBlock);
+}
+
+/* ---------- 嘗試流程 ---------- */
+function beginBlock() {
+  if (state.mode !== 'instr') return;
+  const b = state.blocks[state.bi];
+  state.trials = makeTrials(b);
+  state.ti = 0;
+  document.getElementById('center').innerHTML =
+    '<div class="stim" id="stim"></div><div class="err" id="err">✕</div>';
+  state.mode = 'iti';
+  setTimeout(showTrial, 500);
+}
+
+function showTrial() {
+  const t = state.trials[state.ti];
+  const stim = document.getElementById('stim');
+  stim.textContent = t.stimulus;
+  stim.className = 'stim ' + CAT[t.category].type;
+  document.getElementById('err').classList.remove('show');
+  state.erred = false;
+  // 在字詞畫上畫面的那一格開始計時
+  requestAnimationFrame(() => {
+    state.t0 = performance.now();
+    state.mode = 'trial';
+  });
+}
+
+function respond(side) {
+  const now = performance.now();
+  if (state.mode !== 'trial') return;
+  const b = state.blocks[state.bi];
+  const t = state.trials[state.ti];
+  const correctSide = b.left.includes(t.category) ? 'left' : 'right';
+
+  if (side !== correctSide) {          // 按錯：顯示 ✕，等待改按正確的一邊
+    state.erred = true;
+    document.getElementById('err').classList.add('show');
+    return;
+  }
+
+  state.mode = 'iti';
+  state.data.push({
+    block: b.block,
+    pairing: b.pairing,
+    phase: b.phase,
+    trial: state.ti + 1,
+    category: t.category,
+    stimulus: t.stimulus,
+    correct: state.erred ? 0 : 1,
+    rt_ms: Math.round(now - state.t0)  // 從字詞出現到按對為止
+  });
+  document.getElementById('stim').textContent = '';
+  document.getElementById('err').classList.remove('show');
+
+  state.ti++;
+  if (state.ti < state.trials.length) {
+    setTimeout(showTrial, ITI_MS);
+  } else {
+    state.bi++;
+    setTimeout(() => {
+      if (state.bi < state.blocks.length) renderBlockInstr();
+      else finish();
+    }, ITI_MS);
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (state.mode === 'trial' || state.mode === 'iti') {
+    // 用實體鍵位判斷，中文輸入法開啟或大寫鎖定時也能作答
+    if (e.code === 'KeyE' || e.key === 'e' || e.key === 'E') { e.preventDefault(); respond('left'); }
+    else if (e.code === 'KeyI' || e.key === 'i' || e.key === 'I') { e.preventDefault(); respond('right'); }
+  } else if (state.mode === 'instr' && (e.code === 'Space' || e.key === ' ')) {
+    e.preventDefault();
+    beginBlock();
+  }
+});
+
+window.addEventListener('beforeunload', e => {
+  if (!state.dataSafe) { e.preventDefault(); e.returnValue = ''; }
+});
+
+/* ---------- 計分（不顯示給受測者） ---------- */
+function round4(x) {
+  if (x === null || x === undefined || !isFinite(x)) return null;
+  const r = Math.sign(x) * Math.round((Math.abs(x) + Number.EPSILON) * 10000) / 10000;
+  return r === 0 ? 0 : r;
+}
+function mean(a) { return a.reduce((s, v) => s + v, 0) / a.length; }
+function sdSample(a) {                  // 標準差，分母 n − 1
+  if (a.length < 2) return null;
+  const m = mean(a);
+  return Math.sqrt(a.reduce((s, v) => s + (v - m) * (v - m), 0) / (a.length - 1));
+}
+function dPart(rows) {
+  const a = rows.filter(r => r.pairing === 'A').map(r => r.rt_ms);
+  const b = rows.filter(r => r.pairing === 'B').map(r => r.rt_ms);
+  if (!a.length || !b.length) return null;
+  const sd = sdSample(rows.map(r => r.rt_ms));
+  if (!sd) return null;
+  return (mean(b) - mean(a)) / sd;      // （配對 B 平均 − 配對 A 平均）÷ 標準差
+}
+function computeScore(trials) {
+  const used = trials.filter(t =>
+    (t.phase === 'practice' || t.phase === 'test') && t.rt_ms <= MAX_RT);
+  const n = used.length;
+  const errorRate = n ? used.filter(t => t.correct === 0).length / n : null;
+  const fastRate = n ? used.filter(t => t.rt_ms < FAST_RT).length / n : null;
+  const dPractice = dPart(used.filter(t => t.phase === 'practice'));
+  const dTest = dPart(used.filter(t => t.phase === 'test'));
+  let d = (dPractice !== null && dTest !== null) ? (dPractice + dTest) / 2 : null;
+  if (fastRate !== null && fastRate > FAST_LIMIT) d = null;
+  return {
+    n_trials: n,
+    error_rate: round4(errorRate),
+    fast_rate: round4(fastRate),
+    D_practice: round4(dPractice),
+    D_test: round4(dTest),
+    D: round4(d)
+  };
+}
+
+/* ---------- 結束與傳送 ---------- */
+const BACKUP_KEY = () => `iat_backup_${state.id}_s${state.session}`;
+function saveBackup() {
+  try { localStorage.setItem(BACKUP_KEY(), JSON.stringify(state.payload)); } catch (e) { /* 無法備份時略過 */ }
+}
+function clearBackup() {
+  try { localStorage.removeItem(BACKUP_KEY()); } catch (e) { /* 略過 */ }
+}
+
+async function sendData(payload) {
+  if (!CONFIG.endpoint) return false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      const res = await fetch(CONFIG.endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal
+      });
+      clearTimeout(timer);
+      const text = (await res.text()).trim();
+      if (res.ok && text === 'ok') return true;
+    } catch (e) { /* 失敗就再試一次 */ }
+  }
+  return false;
+}
+
+async function finish() {
+  state.mode = 'end';
+  state.payload = {
+    id: state.id,
+    session: state.session,
+    order: state.order,
+    trials: state.data,
+    score: computeScore(state.data)
+  };
+  saveBackup();
+  app.innerHTML = `
+    <div class="screen">
+      <h1>作答完成</h1>
+      <p id="status">資料傳送中，請稍候，不要關閉這個頁面……</p>
+      <div id="actions" class="actions"></div>
+    </div>`;
+  await trySend();
+}
+
+async function trySend() {
+  const status = document.getElementById('status');
+  const actions = document.getElementById('actions');
+  if (!CONFIG.endpoint) { showFallback(false); return; }
+  status.textContent = '資料傳送中，請稍候，不要關閉這個頁面……';
+  actions.innerHTML = '';
+  const ok = await sendData(state.payload);
+  if (ok) {
+    state.dataSafe = true;
+    clearBackup();
+    status.textContent = '謝謝您的參與！您現在可以關閉這個頁面。';
+  } else {
+    showFallback(true);
+  }
+}
+
+function showFallback(canRetry) {
+  const status = document.getElementById('status');
+  const actions = document.getElementById('actions');
+  status.textContent = '謝謝您的參與！資料沒有自動送出，請按下方按鈕下載資料檔，並交給研究人員。';
+  actions.innerHTML = '<button id="dl" class="btn" type="button">下載 CSV</button>' +
+    (canRetry ? '<button id="retry" class="btn secondary" type="button">重新傳送</button>' : '');
+  document.getElementById('dl').addEventListener('click', downloadCSV);
+  if (canRetry) document.getElementById('retry').addEventListener('click', trySend);
+}
+
+function downloadCSV() {
+  const cols = ['block', 'pairing', 'phase', 'trial', 'category', 'stimulus', 'correct', 'rt_ms'];
+  const q = v => {
+    const s = String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [cols.join(',')].concat(
+    state.payload.trials.map(r => cols.map(c => q(r[c])).join(','))
+  );
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `IAT_${state.id}_session${state.session}_order${state.order}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  state.dataSafe = true;
+}
+
+renderSetup();
+</script>
+</body>
+</html>
